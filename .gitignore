@@ -2,3 +2,5 @@
 /node_modules
 /.wrangler
 /build
+.dev.vars
+cookie.json

@@ -1,9 +1,46 @@
 use chrono::{TimeZone, Utc};
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use worker::kv::KvStore;
 use worker::*;
 
 mod icloud;
 use crate::icloud::HmeEmail;
+
+const KV_KEY: &str = "credentials";
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct Credential {
+    label: String,
+    token: String,
+    cookie: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CredentialRequest {
+    label: String,
+    cookie: serde_json::Value,
+}
+
+fn generate_token() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+async fn get_credentials(kv: &KvStore) -> Result<Vec<Credential>> {
+    let creds_json = kv
+        .get(KV_KEY)
+        .text()
+        .await?
+        .unwrap_or_else(|| "[]".to_string());
+    serde_json::from_str(&creds_json).map_err(|e| worker::Error::from(e.to_string()))
+}
+
+async fn save_credentials(kv: &KvStore, creds: &[Credential]) -> Result<()> {
+    let json = serde_json::to_string(creds).map_err(|e| worker::Error::from(e.to_string()))?;
+    kv.put(KV_KEY, json)?.execute().await.map_err(|e| e.into())
+}
 
 fn log_request(req: &Request) {
     console_log!(
@@ -17,44 +54,162 @@ fn log_request(req: &Request) {
     );
 }
 
+async fn admin_auth(req: &Request, ctx: &RouteContext<()>) -> Result<KvStore> {
+    let admin_token = ctx.secret("ADMIN_TOKEN")?.to_string();
+    let auth_header = req
+        .headers()
+        .get("x-admin-token")?
+        .ok_or_else(|| worker::Error::from("X-Admin-Token header is missing"))?;
+
+    if auth_header != admin_token {
+        return Err(worker::Error::from("Unauthorized"));
+    }
+
+    ctx.kv("HME_BRIDGE_CREDS")
+}
+
 #[event(fetch)]
 pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     log_request(&req);
-
-    // Optionally, get more helpful error messages written to the console in the case of a panic.
     console_error_panic_hook::set_once();
 
-    let router = Router::new();
+    let router = Router::new()
+        .get_async("/admin/credentials", |_req, ctx| async move {
+            let kv = admin_auth(&_req, &ctx).await?;
+            let creds = get_credentials(&kv).await?;
+            Response::from_json(&creds)
+        })
+        .post_async("/admin/credentials", |mut req, ctx| async move {
+            let kv = admin_auth(&req, &ctx).await?;
+            let mut creds = get_credentials(&kv).await?;
 
-    router
-        .post_async("/api/alias/random/new", |mut req, _ctx| async move {
+            let new_req: CredentialRequest = req.json().await?;
+
+            let new_cred = Credential {
+                label: new_req.label,
+                cookie: serde_json::to_string(&new_req.cookie)?,
+                token: generate_token(),
+            };
+            creds.push(new_cred.clone());
+
+            save_credentials(&kv, &creds).await?;
+
+            Response::from_json(&new_cred)
+        })
+        .put_async("/admin/credentials/:token", |mut req, ctx| async move {
+            let kv = admin_auth(&req, &ctx).await?;
+            let token_to_update = ctx.param("token").unwrap();
+            let mut creds = get_credentials(&kv).await?;
+
+            let updated_req: CredentialRequest = req.json().await?;
+
+            if let Some(cred) = creds.iter_mut().find(|c| c.token == *token_to_update) {
+                cred.label = updated_req.label;
+                cred.cookie = serde_json::to_string(&updated_req.cookie)?;
+                let cred_clone = cred.clone();
+                save_credentials(&kv, &creds).await?;
+                Response::from_json(&cred_clone)
+            } else {
+                Response::error("Token not found", 404)
+            }
+        })
+        .delete_async("/admin/credentials/:token", |req, ctx| async move {
+            let kv = admin_auth(&req, &ctx).await?;
+            let token_to_delete = ctx.param("token").unwrap();
+            let mut creds = get_credentials(&kv).await?;
+
+            let original_len = creds.len();
+            creds.retain(|c| c.token != *token_to_delete);
+
+            if creds.len() < original_len {
+                save_credentials(&kv, &creds).await?;
+                Response::ok("Credential deleted")
+            } else {
+                Response::error("Token not found", 404)
+            }
+        })
+        .post_async("/api/alias/random/new", |mut req, ctx| async move {
             let keys_to_use = &[
                 "X-APPLE-DS-WEB-SESSION-TOKEN",
                 "X-APPLE-WEBAUTH-TOKEN",
                 "X-APPLE-WEBAUTH-USER",
             ];
 
-            let api_key = match req.headers().get("authentication") {
-                Ok(Some(value)) => value,
-                _ => return Response::error("Authentication header is missing", 401),
+            let cookie_header = 'auth: {
+                // 1. Try Authorization: Bearer token header first
+                if let Ok(Some(auth_header)) = req.headers().get("authorization") {
+                    if let Some(token) = auth_header.strip_prefix("Bearer ") {
+                        let kv = ctx.kv("HME_BRIDGE_CREDS")?;
+                        if let Ok(Some(creds_json)) = kv.get(KV_KEY).text().await {
+                            if let Ok(creds) = serde_json::from_str::<Vec<Credential>>(&creds_json)
+                            {
+                                if let Some(cred) = creds.iter().find(|c| c.token == token) {
+                                    if let Ok(header) =
+                                        parse_cookies_from_json(&cred.cookie, keys_to_use)
+                                    {
+                                        break 'auth Ok(header);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. Try `authentication` header (for Bitwarden)
+                if let Ok(Some(api_key)) = req.headers().get("authentication") {
+                    if api_key.is_empty() {
+                        break 'auth Err(Response::error("Authentication header is empty", 401));
+                    }
+
+                    // Try parsing as JSON cookie first
+                    if let Ok(header) = parse_cookies_from_json(&api_key, keys_to_use) {
+                        break 'auth Ok(header);
+                    }
+
+                    // If not JSON, treat as a token and look up in KV
+                    let token = api_key;
+                    let kv = match ctx.kv("HME_BRIDGE_CREDS") {
+                        Ok(kv) => kv,
+                        Err(_) => {
+                            break 'auth Err(Response::error("Internal Server Error", 500));
+                        }
+                    };
+
+                    let credentials_json = match kv.get(KV_KEY).text().await {
+                        Ok(Some(json)) => json,
+                        _ => {
+                            break 'auth Err(Response::error("Invalid credentials", 401));
+                        }
+                    };
+
+                    let credentials: Vec<Credential> = match serde_json::from_str(&credentials_json)
+                    {
+                        Ok(creds) => creds,
+                        Err(_) => {
+                            break 'auth Err(Response::error("Invalid credentials format", 500));
+                        }
+                    };
+
+                    if let Some(cred) = credentials.iter().find(|c| c.token == token) {
+                        if let Ok(header) = parse_cookies_from_json(&cred.cookie, keys_to_use) {
+                            break 'auth Ok(header);
+                        }
+                    }
+                }
+
+                break 'auth Err(Response::error(
+                    "Authentication header is missing or invalid",
+                    401,
+                ));
             };
 
-            if api_key.is_empty() {
-                return Response::error("Authentication header is empty", 401);
-            }
-
-            let cookie_header = match parse_cookies_from_json(&api_key, keys_to_use) {
-                Ok(header) => header,
-                Err(_) => {
-                    return Response::error(
-                        "API Key or cookie.txt is not a valid JSON array of cookie objects",
-                        400,
-                    );
-                }
+            let cookie_header = match cookie_header {
+                Ok(h) => h,
+                Err(e) => return e,
             };
 
             if cookie_header.is_empty() {
-                return Response::error("Required cookies not found in API Key or cookie.txt", 401);
+                return Response::error("Required cookies not found in stored credential", 500);
             }
 
             let payload: CreateAliasRequest = match req.json().await {
@@ -77,12 +232,12 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     Response::error(format!("Internal Server Error: {}", e), 500)
                 }
             }
-        })
-        .run(req, env)
-        .await
+        });
+
+    router.run(req, env).await
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct CookieObject {
     name: String,
     value: String,
