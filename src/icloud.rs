@@ -1,8 +1,8 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use url::Url;
-use worker::{Fetch, Headers, Method, Request, RequestInit};
 use wasm_bindgen::JsValue;
+use worker::{Fetch, Headers, Method, Request, RequestInit};
 
 #[derive(Debug, Deserialize)]
 struct WebService {
@@ -94,8 +94,12 @@ pub async fn generate_and_reserve_hme(
 
     // Generate HME
     let generate_url = format!("{}/v1/hme/generate", base_url);
-    let generate_res: PremiumMailSettingsResponse<GenerateHmeResult> =
-        post(&generate_url, cookie_header, Some(serde_json::json!({ "langCode": "en-us" }))).await?;
+    let generate_res: PremiumMailSettingsResponse<GenerateHmeResult> = post(
+        &generate_url,
+        cookie_header,
+        Some(serde_json::json!({ "langCode": "en-us" })),
+    )
+    .await?;
 
     if !generate_res.success {
         return Err(worker::Error::from(format!(

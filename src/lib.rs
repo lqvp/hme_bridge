@@ -11,7 +11,9 @@ fn log_request(req: &Request) {
         Date::now().to_string(),
         req.path(),
         req.cf().and_then(|cf| cf.coordinates()).unwrap_or_default(),
-        req.cf().and_then(|cf| cf.region()).unwrap_or_else(|| "unknown region".into())
+        req.cf()
+            .and_then(|cf| cf.region())
+            .unwrap_or_else(|| "unknown region".into())
     );
 }
 
@@ -47,15 +49,12 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     return Response::error(
                         "API Key or cookie.txt is not a valid JSON array of cookie objects",
                         400,
-                    )
+                    );
                 }
             };
 
             if cookie_header.is_empty() {
-                return Response::error(
-                    "Required cookies not found in API Key or cookie.txt",
-                    401,
-                );
+                return Response::error("Required cookies not found in API Key or cookie.txt", 401);
             }
 
             let payload: CreateAliasRequest = match req.json().await {
@@ -89,7 +88,10 @@ struct CookieObject {
     value: String,
 }
 
-fn parse_cookies_from_json(json_str: &str, keys: &[&str]) -> std::result::Result<String, serde_json::Error> {
+fn parse_cookies_from_json(
+    json_str: &str,
+    keys: &[&str],
+) -> std::result::Result<String, serde_json::Error> {
     let cookies: Vec<CookieObject> = serde_json::from_str(json_str)?;
     let cookie_header = cookies
         .into_iter()
