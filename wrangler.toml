@@ -1,0 +1,6 @@
+name = "hme-bridge"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-08-23"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"

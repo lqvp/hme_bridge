@@ -1,23 +1,38 @@
-# HME Bridge
+# HME Bridge for Cloudflare Workers
 
-Bitwarden (or Vaultwarden) client's SimpleLogin integration to use iCloud Hide My Email.
+This project acts as a bridge between Bitwarden's SimpleLogin integration and Apple's iCloud Hide My Email (HME) service, running on the Cloudflare Workers serverless platform.
 
-## How to Use
+## How to Deploy
 
-1. Build and run this application.
+1. **Install Wrangler CLI:**
+    If you don't have it already, install the Cloudflare Wrangler CLI.
 
     ```bash
-    cargo run --release
+    npm install -g wrangler
     ```
 
-    The server will start on `127.0.0.1:3000`.
+2. **Login to Cloudflare:**
 
-2. Configure Bitwarden client.
-    - Go to Generator -> Username.
-    - Select "Forwarded email alias".
-    - For "Service", select "SimpleLogin".
-    - For "Email domain", enter your self-hosted server URL: `http://127.0.0.1:3000`
-    - For "API Key", you need to provide your iCloud session cookies. See the next section.
+    ```bash
+    wrangler login
+    ```
+
+3. **Build and Deploy:**
+    Deploy the worker to your Cloudflare account.
+
+    ```bash
+    wrangler deploy
+    ```
+
+    After deployment, Wrangler will output your worker's URL.
+
+## How to Configure Bitwarden
+
+1. Go to **Generator** -> **Username**.
+2. Select **Forwarded email alias**.
+3. For **Service**, select **SimpleLogin**.
+4. For **Email domain**, enter your Cloudflare Worker's URL (e.g., `https://hme-bridge.your-username.workers.dev`).
+5. For **API Key**, you need to provide your iCloud session cookies. See the next section.
 
 ## How to get the API Key (iCloud Cookies)
 
@@ -26,7 +41,6 @@ To authenticate with iCloud, you must provide three essential cookies from your 
 1. Install a cookie editor extension that can export in **JSON format**. We recommend **Get cookies.txt LOCALLY**.
     - [Chrome/Edge Link](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
     - [Firefox Link](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt-locally/)
-    - [Repository](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
 2. Log in to [icloud.com](https://www.icloud.com/).
 3. Open the extension and export cookies for the current site as **JSON**.
 4. Open the exported JSON file/text.
@@ -60,3 +74,4 @@ To authenticate with iCloud, you must provide three essential cookies from your 
     "...": "..."
   }
 ]
+```

@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use std::collections::HashMap;
+use url::Url;
+use worker::{Fetch, Headers, Method, Request, RequestInit};
+use wasm_bindgen::JsValue;
 
 #[derive(Debug, Deserialize)]
 struct WebService {
     url: Option<String>,
-    // status is unused
-    // status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -22,16 +23,12 @@ struct GenerateHmeResult {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HmeEmail {
-    // pub origin: String,
-    // pub anonymous_id: String,
-    // pub domain: String,
     pub forward_to_email: Option<String>,
     pub hme: String,
     pub is_active: bool,
     pub label: String,
     pub note: String,
     pub create_timestamp: i64,
-    // pub recipient_mail_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,98 +43,83 @@ struct PremiumMailSettingsResponse<T> {
     error: Option<serde_json::Value>,
 }
 
-// Client struct placeholder for future expansion
+async fn post<T: for<'de> Deserialize<'de>>(
+    url: &str,
+    cookie_header: &str,
+    body: Option<serde_json::Value>,
+) -> Result<T, worker::Error> {
+    let headers = Headers::new();
+    headers.set("Cookie", cookie_header)?;
+    headers.set("Content-Type", "application/json")?;
+    headers.set("Origin", "https://www.icloud.com")?;
+    headers.set("Referer", "https://www.icloud.com/")?;
+    headers.set(
+        "User-Agent",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",
+    )?;
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post).with_headers(headers);
+    if let Some(body_value) = body {
+        init.with_body(Some(JsValue::from_str(
+            &serde_json::to_string(&body_value).unwrap(),
+        )));
+    }
+
+    let req = Request::new_with_init(url, &init)?;
+    let mut res = Fetch::Request(req).send().await?;
+    let res_json: T = res.json().await?;
+    Ok(res_json)
+}
 
 pub async fn generate_and_reserve_hme(
     cookie_header: &str,
     label: &str,
     note: &str,
-) -> Result<HmeEmail, Box<dyn std::error::Error>> {
-    // 1. Create a client with cookie support
-    let client = reqwest::Client::builder().cookie_store(true).build()?;
+) -> Result<HmeEmail, worker::Error> {
+    let mut url = Url::parse("https://setup.icloud.com/setup/ws/1/validate").unwrap();
+    url.query_pairs_mut()
+        .append_pair("clientBuildNumber", "2420Hotfix12")
+        .append_pair("clientMasteringNumber", "2420Hotfix12")
+        .append_pair("clientId", "")
+        .append_pair("dsid", "");
 
-    // 2. Validate token and get the webservice URL
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("Cookie", cookie_header.parse()?);
-    headers.insert("Content-Type", "application/json".parse()?);
-    headers.insert("Origin", "https://www.icloud.com".parse()?);
-    headers.insert("Referer", "https://www.icloud.com/".parse()?);
-    headers.insert(
-        "User-Agent",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36".parse()?,
-    );
+    let validate_res: ValidateResponse = post(url.as_str(), cookie_header, None).await?;
 
-    let params = [
-        ("clientBuildNumber", "2420Hotfix12"),
-        ("clientMasteringNumber", "2420Hotfix12"),
-        ("clientId", ""), // This might need a real value
-        ("dsid", ""),     // This might need a real value
-    ];
-
-    let response = client
-        .post("https://setup.icloud.com/setup/ws/1/validate")
-        .headers(headers.clone())
-        .query(&params)
-        .send()
-        .await?;
-
-    let response_text = response.text().await?;
-    tracing::debug!("Validate response body: {}", response_text);
-
-    let validate_res: ValidateResponse = serde_json::from_str(&response_text)?;
-
-    let base_url = &validate_res
+    let base_url = validate_res
         .webservices
         .get("premiummailsettings")
-        .ok_or("premiummailsettings service not found")?
-        .url
-        .as_ref()
-        .ok_or("premiummailsettings URL is null")?;
+        .and_then(|ws| ws.url.as_ref())
+        .ok_or_else(|| worker::Error::from("premiummailsettings URL not found"))?;
 
-    // 3. Generate HME
+    // Generate HME
     let generate_url = format!("{}/v1/hme/generate", base_url);
-    let response = client
-        .post(generate_url)
-        .headers(headers.clone())
-        .query(&params)
-        .json(&serde_json::json!({ "langCode": "en-us" }))
-        .send()
-        .await?;
-
-    let response_text = response.text().await?;
-    tracing::debug!("Generate HME response body: {}", response_text);
-
     let generate_res: PremiumMailSettingsResponse<GenerateHmeResult> =
-        serde_json::from_str(&response_text)?;
+        post(&generate_url, cookie_header, Some(serde_json::json!({ "langCode": "en-us" }))).await?;
 
     if !generate_res.success {
-        return Err(format!("Failed to generate HME: {:?}", generate_res.error).into());
+        return Err(worker::Error::from(format!(
+            "Failed to generate HME: {:?}",
+            generate_res.error
+        )));
     }
     let hme = generate_res.result.hme;
 
-    // 4. Reserve HME
+    // Reserve HME
     let reserve_url = format!("{}/v1/hme/reserve", base_url);
     let reserve_body = serde_json::json!({
         "hme": hme,
         "label": label,
         "note": note
     });
-    let response = client
-        .post(reserve_url)
-        .headers(headers)
-        .query(&params)
-        .json(&reserve_body)
-        .send()
-        .await?;
-
-    let response_text = response.text().await?;
-    tracing::debug!("Reserve HME response body: {}", response_text);
-
     let reserve_res: PremiumMailSettingsResponse<ReserveHmeResult> =
-        serde_json::from_str(&response_text)?;
+        post(&reserve_url, cookie_header, Some(reserve_body)).await?;
 
     if !reserve_res.success {
-        return Err(format!("Failed to reserve HME: {:?}", reserve_res.error).into());
+        return Err(worker::Error::from(format!(
+            "Failed to reserve HME: {:?}",
+            reserve_res.error
+        )));
     }
 
     Ok(reserve_res.result.hme)
