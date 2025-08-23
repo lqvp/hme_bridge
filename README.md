@@ -31,7 +31,9 @@ This project acts as a bridge between Bitwarden's SimpleLogin integration and Ap
 1. Go to **Generator** -> **Username**.
 2. Select **Forwarded email alias**.
 3. For **Service**, select **SimpleLogin**.
-4. For **Email domain**, enter your Cloudflare Worker's URL (e.g., `https://hme-bridge.your-username.workers.dev`).
+4. For **Email domain**, enter your Cloudflare Worker's URL
+   (e.g., `https://hme-bridge.your-username.workers.dev`).
+   **Note:** Make sure to include `https://` at the beginning, and do **not** add a trailing `/`.
 5. For **API Key**, you need to provide your iCloud session cookies. See the next section.
 
 ## How to get the API Key (iCloud Cookies)
@@ -39,7 +41,8 @@ This project acts as a bridge between Bitwarden's SimpleLogin integration and Ap
 To authenticate with iCloud, you must provide three essential cookies from your browser session.
 
 1. Install a cookie editor extension that can export in **JSON format**. We recommend **Get cookies.txt LOCALLY**.
-    - [Chrome/Edge Link](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
+    - [Source Code](https://github.com/kairi003/Get-cookies.txt-LOCALLY)
+    - [Chrome](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
     - [Firefox Link](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt-locally/)
 2. Log in to [icloud.com](https://www.icloud.com/).
 3. Open the extension and export cookies for the current site as **JSON**.
@@ -48,8 +51,9 @@ To authenticate with iCloud, you must provide three essential cookies from your 
     - `X-APPLE-DS-WEB-SESSION-TOKEN`
     - `X-APPLE-WEBAUTH-TOKEN`
     - `X-APPLE-WEBAUTH-USER`
-6. Create a new JSON array containing **only these three cookie objects**.
-7. Paste the entire JSON array string into the API Key field in Bitwarden.
+6. You can simply copy and paste the entire exported JSON directly into Bitwarden — the server-side parser will automatically extract the required tokens.
+   However, if you prefer a stricter setup, create a new JSON array containing **only these three cookie objects**.
+7. Paste the resulting JSON array (or the full JSON if using the simple method) into the API Key field in Bitwarden.
 
 **Example API Key format:**
 
@@ -75,3 +79,7 @@ To authenticate with iCloud, you must provide three essential cookies from your 
   }
 ]
 ```
+
+## LICENSE
+
+[MIT](LICENSE)
