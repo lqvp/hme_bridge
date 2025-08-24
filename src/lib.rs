@@ -104,8 +104,23 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let updated_req: CredentialRequest = req.json().await?;
 
             if let Some(cred) = creds.iter_mut().find(|c| c.token == *token_to_update) {
+                let keys_to_use = &[
+                    "X-APPLE-DS-WEB-SESSION-TOKEN",
+                    "X-APPLE-WEBAUTH-TOKEN",
+                    "X-APPLE-WEBAUTH-USER",
+                ];
+                let cookie_str = serde_json::to_string(&updated_req.cookie)?;
+                if parse_cookies_from_json(&cookie_str, keys_to_use)
+                    .map(|s| s.is_empty())
+                    .unwrap_or(true)
+                {
+                    return Response::error(
+                        "Invalid cookie payload: required iCloud cookies not found",
+                        400,
+                    );
+                }
                 cred.label = updated_req.label;
-                cred.cookie = serde_json::to_string(&updated_req.cookie)?;
+                cred.cookie = cookie_str;
                 let cred_clone = cred.clone();
                 save_credentials(&kv, &creds).await?;
                 Response::from_json(&cred_clone)
