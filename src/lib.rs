@@ -22,6 +22,11 @@ struct CredentialRequest {
     cookie: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct CookieListWrapper {
+    cookies: Vec<CookieObject>,
+}
+
 fn generate_token() -> String {
     let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -262,7 +267,13 @@ fn parse_cookies_from_json(
     json_str: &str,
     keys: &[&str],
 ) -> std::result::Result<String, serde_json::Error> {
-    let cookies: Vec<CookieObject> = serde_json::from_str(json_str)?;
+ let cookies: Vec<CookieObject> = match serde_json::from_str(json_str) {
+      Ok(list) => list,
+      Err(_) => {
+          let wrapper: CookieListWrapper = serde_json::from_str(json_str)?;
+          wrapper.cookies
+      }
+  };
     let cookie_header = cookies
         .into_iter()
         .filter(|c| keys.contains(&c.name.as_str()))
@@ -286,9 +297,15 @@ fn hme_to_alias(hme: HmeEmail) -> Alias {
         enabled: hme.is_active,
         creation_timestamp: hme.create_timestamp,
         creation_date: Utc
-            .timestamp_millis_opt(hme.create_timestamp)
-            .unwrap()
-            .to_rfc3339(),
+                    .timestamp_millis_opt(hme.create_timestamp)
+                    .single()
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_else(|| {
+                        Utc.timestamp_millis_opt(0)
+                            .single()
+                            .unwrap()
+                            .to_rfc3339()
+                    }),
         note: Some(hme.note),
         nb_block: 0,
         nb_forward: 0,
