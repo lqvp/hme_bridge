@@ -185,6 +185,12 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
                     // Try parsing as JSON cookie first
                     if let Ok(header) = parse_cookies_from_json(&api_key, keys_to_use) {
+                        if header.is_empty() {
+                            break 'auth Err(Response::error(
+                                "Invalid cookie payload: required iCloud cookies not found",
+                                400,
+                            ));
+                        }
                         break 'auth Ok(header);
                     }
 
