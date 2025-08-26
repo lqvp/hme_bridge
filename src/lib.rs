@@ -80,11 +80,13 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
     let router = Router::new()
         .get_async("/admin/credentials", |_req, ctx| async move {
-            let kv = admin_auth(&_req, &ctx).await?;
+            let kv = match admin_auth(&_req, &ctx).await {
+                Ok(kv) => kv,
+                Err(_) => return Response::error("Unauthorized", 401),
+            };
             let creds = get_credentials(&kv).await?;
             Response::from_json(&creds)
         })
-        .post_async("/admin/credentials", |mut req, ctx| async move {
             let kv = admin_auth(&req, &ctx).await?;
             let mut creds = get_credentials(&kv).await?;
 
