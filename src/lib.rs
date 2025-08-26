@@ -29,7 +29,7 @@ struct CookieListWrapper {
 
 fn generate_token() -> String {
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     hex::encode(bytes)
 }
 
@@ -87,25 +87,46 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let creds = get_credentials(&kv).await?;
             Response::from_json(&creds)
         })
-            let kv = admin_auth(&req, &ctx).await?;
+        .post_async("/admin/credentials", |mut req, ctx| async move {
+            let kv = match admin_auth(&req, &ctx).await {
+                Ok(kv) => kv,
+                Err(_) => return Response::error("Unauthorized", 401),
+            };
             let mut creds = get_credentials(&kv).await?;
-
             let new_req: CredentialRequest = req.json().await?;
-
+            let keys_to_use = &[
+                "X-APPLE-DS-WEB-SESSION-TOKEN",
+                "X-APPLE-WEBAUTH-TOKEN",
+                "X-APPLE-WEBAUTH-USER",
+            ];
+            let cookie_str = serde_json::to_string(&new_req.cookie)?;
+            if parse_cookies_from_json(&cookie_str, keys_to_use)
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                return Response::error(
+                    "Invalid cookie payload: required iCloud cookies not found",
+                    400,
+                );
+            }
             let new_cred = Credential {
                 label: new_req.label,
-                cookie: serde_json::to_string(&new_req.cookie)?,
+                cookie: cookie_str,
                 token: generate_token(),
             };
             creds.push(new_cred.clone());
-
             save_credentials(&kv, &creds).await?;
-
             Response::from_json(&new_cred)
         })
         .put_async("/admin/credentials/:token", |mut req, ctx| async move {
-            let kv = admin_auth(&req, &ctx).await?;
-            let token_to_update = ctx.param("token").unwrap();
+            let kv = match admin_auth(&req, &ctx).await {
+                Ok(kv) => kv,
+                Err(_) => return Response::error("Unauthorized", 401),
+            };
+            let token_to_update = match ctx.param("token") {
+                Some(t) => t,
+                None => return Response::error("Bad Request: token is required", 400),
+            };
             let mut creds = get_credentials(&kv).await?;
 
             let updated_req: CredentialRequest = req.json().await?;
@@ -136,8 +157,14 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
         })
         .delete_async("/admin/credentials/:token", |req, ctx| async move {
-            let kv = admin_auth(&req, &ctx).await?;
-            let token_to_delete = ctx.param("token").unwrap();
+            let kv = match admin_auth(&req, &ctx).await {
+                Ok(kv) => kv,
+                Err(_) => return Response::error("Unauthorized", 401),
+            };
+            let token_to_delete = match ctx.param("token") {
+                Some(t) => t,
+                None => return Response::error("Bad Request: token is required", 400),
+            };
             let mut creds = get_credentials(&kv).await?;
 
             let original_len = creds.len();
@@ -161,7 +188,10 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 // 1. Try Authorization: Bearer token header first
                 if let Ok(Some(auth_header)) = req.headers().get("authorization") {
                     if let Some(token) = auth_header.strip_prefix("Bearer ") {
-                        let kv = ctx.kv("HME_BRIDGE_CREDS")?;
+                        let kv = match ctx.kv("HME_BRIDGE_CREDS") {
+                            Ok(kv) => kv,
+                            Err(_) => break 'auth Err(Response::error("Internal Server Error", 500)),
+                        };
                         if let Ok(Some(creds_json)) = kv.get(KV_KEY).text().await {
                             if let Ok(creds) = serde_json::from_str::<Vec<Credential>>(&creds_json)
                             {
