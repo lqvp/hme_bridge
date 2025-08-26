@@ -4,3 +4,8 @@ compatibility_date = "2025-08-23"
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
+
+[[kv_namespaces]]
+binding = "HME_BRIDGE_CREDS"
+id = "dummy-id-for-local-testing"
+preview_id = "dummy-id-for-local-testing"
