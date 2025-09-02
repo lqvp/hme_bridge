@@ -2,6 +2,17 @@
 
 This project acts as a bridge between Bitwarden's SimpleLogin integration and Apple's iCloud Hide My Email (HME) service, running on the Cloudflare Workers serverless platform.
 
+## Public Instance
+
+For those who wish to use this service without setting up their own deployment, a public instance is available for general use.
+
+- **URL:** `https://hme-bridge-9hjgiu3hy.meru.workers.dev`
+
+To use it, simply follow the instructions for **`Method 1: Direct Cookie Authentication`**, and use the URL above for the **Self-host server URL** field in Bitwarden.
+
+> [!WARNING]
+> **Disclaimer:** Please be aware that when using the public instance, your iCloud cookie data is passed through this third-party server. While this instance is configured not to log or store your cookies, **self-hosting is strongly recommended for maximum security**. This service is provided as-is without any guarantee of uptime or long-term availability.
+
 ## How to Deploy
 
 1. **Install Wrangler CLI:**
